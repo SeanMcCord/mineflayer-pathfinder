@@ -5,7 +5,6 @@ import { Vec3 } from 'vec3';
 import { Block } from 'prismarine-block';
 import { Entity } from 'prismarine-entity';
 
-declare module 'mineflayer-pathfinder' {
 	export function pathfinder(bot: Bot): void;
 
 	export interface Pathfinder {
@@ -208,4 +207,3 @@ declare module 'mineflayer-pathfinder' {
 		liquid: boolean;
 		height: number;
 	}
-}
