@@ -1,4 +1,4 @@
-const { performance } = require('perf_hooks')
+const {performance} = require('perf_hooks')
 
 const AStar = require('./lib/astar')
 const Move = require('./lib/move')
@@ -10,7 +10,7 @@ const Vec3 = require('vec3').Vec3
 const Physics = require('./lib/physics')
 const nbt = require('prismarine-nbt')
 
-function inject (bot) {
+function inject(bot) {
   const mcData = require('minecraft-data')(bot.version)
   const waterType = mcData.blocksByName.water.id
   const ladderId = mcData.blocksByName.ladder.id
@@ -68,23 +68,23 @@ function inject (bot) {
 
   Object.defineProperties(bot.pathfinder, {
     goal: {
-      get () {
+      get() {
         return stateGoal
       }
     },
     movements: {
-      get () {
+      get() {
         return stateMovements
       }
     }
   })
 
-  function detectDiggingStopped () {
+  function detectDiggingStopped() {
     digging = false
     bot.removeAllListeners('diggingAborted', detectDiggingStopped)
     bot.removeAllListeners('diggingCompleted', detectDiggingStopped)
   }
-  function resetPath (reason, clearStates = true) {
+  function resetPath(reason, clearStates = true) {
     if (path.length > 0) bot.emit('path_reset', reason)
     path = []
     if (digging) {
@@ -118,11 +118,16 @@ function inject (bot) {
     return gotoUtil(bot, goal)
   }
 
+  // The other goto is callbackifyed
+  bot.pathfinder.asyncGoto = (goal) => {
+    return gotoUtil(bot, goal)
+  }
+
   bot.pathfinder.goto = callbackify(bot.pathfinder.goto, 1)
 
   bot.on('physicTick', monitorMovement)
 
-  function postProcessPath (path) {
+  function postProcessPath(path) {
     for (let i = 0; i < path.length; i++) {
       const curPoint = path[i]
       if (curPoint.toBreak.length > 0 || curPoint.toPlace.length > 0) break
@@ -161,7 +166,7 @@ function inject (bot) {
     return newPath
   }
 
-  function pathFromPlayer (path) {
+  function pathFromPlayer(path) {
     if (path.length === 0) return
     let minI = 0
     let minDistance = 1000
@@ -191,7 +196,7 @@ function inject (bot) {
     path.splice(0, minI)
   }
 
-  function isPositionNearPath (pos, path) {
+  function isPositionNearPath(pos, path) {
     for (const node of path) {
       const dx = Math.abs(node.x - pos.x - 0.5)
       const dy = Math.abs(node.y - pos.y - 0.5)
@@ -203,7 +208,7 @@ function inject (bot) {
 
   // Return the average x/z position of the highest standing positions
   // in the block.
-  function getPositionOnTopOf (block) {
+  function getPositionOnTopOf(block) {
     if (!block || block.shapes.length === 0) return null
     const p = new Vec3(0.5, 0, 0.5)
     let n = 1
@@ -225,7 +230,7 @@ function inject (bot) {
     return block.position.plus(p)
   }
 
-  function fullStop () {
+  function fullStop() {
     bot.clearControlStates()
 
     // Force horizontal velocity to 0 (otherwise inertia can move us too far)
@@ -238,14 +243,14 @@ function inject (bot) {
 
     // Make sure our bounding box don't collide with neighboring blocks
     // otherwise recenter the position
-    if (Math.abs(bot.entity.position.x - blockX) > 0.2) { bot.entity.position.x = blockX }
-    if (Math.abs(bot.entity.position.z - blockZ) > 0.2) { bot.entity.position.z = blockZ }
+    if (Math.abs(bot.entity.position.x - blockX) > 0.2) {bot.entity.position.x = blockX}
+    if (Math.abs(bot.entity.position.z - blockZ) > 0.2) {bot.entity.position.z = blockZ}
   }
 
-  function moveToEdge (refBlock, edge) {
+  function moveToEdge(refBlock, edge) {
     // If allowed turn instantly should maybe be a bot option
     const allowInstantTurn = false
-    function getViewVector (pitch, yaw) {
+    function getViewVector(pitch, yaw) {
       const csPitch = Math.cos(pitch)
       const snPitch = Math.sin(pitch)
       const csYaw = Math.cos(yaw)
@@ -272,7 +277,7 @@ function inject (bot) {
     return true
   }
 
-  function moveToBlock (pos) {
+  function moveToBlock(pos) {
     // minDistanceSq = Min distance sqrt to the target pos were the bot is centered enough to place blocks around him
     const minDistanceSq = 0.2 * 0.2
     const targetPos = pos.clone().offset(0.5, 0, 0.5)
@@ -295,7 +300,7 @@ function inject (bot) {
     resetPath('chunk_loaded', false)
   })
 
-  function monitorMovement () {
+  function monitorMovement() {
     // Test freemotion
     if (stateMovements && stateMovements.allowFreeMotion && stateGoal && stateGoal.entity) {
       const target = stateGoal.entity
@@ -470,10 +475,10 @@ function inject (bot) {
   }
 }
 
-function callbackify (f) {
+function callbackify(f) {
   return function (...args) {
     const cb = args[f.length]
-    return f(...args).then(r => { if (cb) { cb(null, r) } return r }, err => { if (cb) { cb(err) } else throw err })
+    return f(...args).then(r => {if (cb) {cb(null, r)} return r}, err => {if (cb) {cb(err)} else throw err})
   }
 }
 
