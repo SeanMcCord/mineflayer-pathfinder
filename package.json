@@ -12,7 +12,9 @@
   "author": "Karang",
   "license": "MIT",
   "dependencies": {
+    "debug": "^4.3.1",
     "minecraft-data": "^2.75.0",
+    "pino": "^6.11.3",
     "prismarine-block": "^1.7.3",
     "prismarine-entity": "^1.1.0",
     "prismarine-item": "^1.5.0",
@@ -21,8 +23,8 @@
     "vec3": "^0.1.7"
   },
   "devDependencies": {
-    "mineflayer-pathfinder": "file:./",
     "mineflayer": "^3.2.0",
+    "mineflayer-pathfinder": "file:./",
     "standard": "^16.0.3"
   }
 }

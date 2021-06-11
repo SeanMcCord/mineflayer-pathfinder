@@ -5,6 +5,8 @@ const Move = require('./lib/move')
 const Movements = require('./lib/movements')
 const gotoUtil = require('./lib/goto')
 
+const {logger} = require('./lib/logger')
+
 const Vec3 = require('vec3').Vec3
 
 const Physics = require('./lib/physics')
@@ -20,16 +22,41 @@ function inject(bot) {
   let astarContext = null
   let astartTimedout = false
   let dynamicGoal = false
+  let expectedUpdatePositions = new Set()
   let path = []
   let pathUpdated = false
   let digging = false
+  let diggingAbortedListenerCount = 0
+  let diggingCompletedListenerCount = []
+  let abortingDig = false
   let placing = false
   let placingBlock = null
+  let digErrorCount = 0
+  let zeroLengthPathCount = 0
   let lastNodeTime = performance.now()
+  let completeNodeTime = performance.now()
   let returningPos = null
   const physics = new Physics(bot)
+  const minimumThinkTime = 100;
 
   bot.pathfinder = {}
+
+  bot.pathfinder.showState = () => {
+    return {
+      stateGoal,
+      astarContext,
+      astartTimedout,
+      dynamicGoal,
+      expectedUpdatePositions,
+      path,
+      pathUpdated,
+      digging,
+      abortingDig,
+      placing,
+      placingBlock,
+      returningPos
+    }
+  }
 
   bot.pathfinder.thinkTimeout = 5000 // ms
   bot.pathfinder.tickTimeout = 40 // ms, amount of thinking per tick (max 50 ms)
@@ -56,6 +83,7 @@ function inject(bot) {
   }
 
   bot.pathfinder.getPathTo = (movements, goal, timeout) => {
+    logger.info('get path to start')
     const p = bot.entity.position
     const dy = p.y - Math.floor(p.y)
     const b = bot.blockAt(p)
@@ -63,6 +91,7 @@ function inject(bot) {
     astarContext = new AStar(start, movements, goal, timeout || bot.pathfinder.thinkTimeout, bot.pathfinder.tickTimeout, bot.pathfinder.searchRadius)
     const result = astarContext.compute()
     result.path = postProcessPath(result.path)
+    logger.info('get path to end')
     return result
   }
 
@@ -79,18 +108,40 @@ function inject(bot) {
     }
   })
 
+  function nodeComplete(node) {
+    const time = performance.now() - completeNodeTime
+    completeNodeTime = performance.now()
+    bot.emit('path_node_complete', node, time)
+  }
+
   function detectDiggingStopped() {
     digging = false
-    bot.removeAllListeners('diggingAborted', detectDiggingStopped)
-    bot.removeAllListeners('diggingCompleted', detectDiggingStopped)
+    logger.info({diggingMustStop: {digging, digErrorCount}});
+    // TODO: remove the usage of removeAllListeners
+    bot.removeListener('diggingAborted', detectDiggingStopped)
+    diggingAbortedListenerCount -= 1;
+    bot.removeListener('diggingCompleted', detectDiggingStopped)
+    diggingCompletedListenerCount -= 1;
+    logger.info({diggingAbortedListenerCount, diggingCompletedListenerCount});
+    abortingDig = false
   }
   function resetPath(reason, clearStates = true) {
     if (path.length > 0) bot.emit('path_reset', reason)
+    // logger.info({digBlock: bot.targetDigBlock});
     path = []
+    zeroLengthPathCount = 0
+    expectedUpdatePositions.clear()
     if (digging) {
+      logger.info({digErrorCount});
+      abortingDig = true
       bot.on('diggingAborted', detectDiggingStopped)
+      diggingAbortedListenerCount += 1;
       bot.on('diggingCompleted', detectDiggingStopped)
+      diggingCompletedListenerCount += 1;
       bot.stopDigging()
+      if (bot.targetDigBlock == null) {
+        detectDiggingStopped()
+      }
     }
     placing = false
     pathUpdated = false
@@ -125,7 +176,15 @@ function inject(bot) {
 
   bot.pathfinder.goto = callbackify(bot.pathfinder.goto, 1)
 
-  bot.on('physicTick', monitorMovement)
+  let tickCount = 0;
+  const responseTime = () => {
+    const tick = (tickCount += 1);
+    const startTime = performance.now();
+    monitorMovement();
+    // logger.info({tick, time: performance.now() - startTime});
+  }
+
+  bot.on('physicTick', responseTime)
 
   function postProcessPath(path) {
     for (let i = 0; i < path.length; i++) {
@@ -292,6 +351,12 @@ function inject(bot) {
 
   bot.on('blockUpdate', (oldBlock, newBlock) => {
     if (isPositionNearPath(oldBlock.position, path) && oldBlock.type !== newBlock.type) {
+      if (expectedUpdatePositions.has(oldBlock.position.toString())) {
+        expectedUpdatePositions.delete(oldBlock.position.toString())
+        logger.info(`ignoreing block update ${oldBlock.position}`);
+        return
+      }
+      // ignore expected updates.
       resetPath('block_updated', false)
     }
   })
@@ -301,6 +366,7 @@ function inject(bot) {
   })
 
   function monitorMovement() {
+    logger.info({pathLength: path.length, node: path[0]});
     // Test freemotion
     if (stateMovements && stateMovements.allowFreeMotion && stateGoal && stateGoal.entity) {
       const target = stateGoal.entity
@@ -312,12 +378,14 @@ function inject(bot) {
         } else {
           bot.clearControlStates()
         }
+        logger.info('pathfinder|monitorMovement free motion');
         return
       }
     }
 
     if (stateGoal && stateGoal.hasChanged()) {
-      resetPath('goal_moved', false)
+      // HACK: seems fine with this clearing state
+      resetPath('goal_moved')
     }
 
     if (astarContext && astartTimedout) {
@@ -330,7 +398,11 @@ function inject(bot) {
     }
 
     if (bot.pathfinder.LOSWhenPlacingBlocks && returningPos) {
-      if (!moveToBlock(returningPos)) return
+      // logger.info({returningToPos: returningPos});
+      if (!moveToBlock(returningPos)) {
+        logger.info('pathfinder|monitorMovement moving to edge of block');
+        return
+      }
       returningPos = null
     }
 
@@ -349,11 +421,19 @@ function inject(bot) {
           path = results.path
           astartTimedout = results.status === 'partial'
           pathUpdated = true
+          // HACK: ensure dig handlers are clear
         }
       }
     }
 
     if (path.length === 0) {
+      zeroLengthPathCount += 1;
+      logger.info({message: 'pathfinder|monitorMovement path length 0', zeroLengthPathCount});
+      // HACK
+      // number is just a guess for what would work well
+      if (zeroLengthPathCount > 150) {
+        resetPath('stuck')
+      }
       return
     }
 
@@ -362,20 +442,29 @@ function inject(bot) {
 
     // Handle digging
     if (digging || nextPoint.toBreak.length > 0) {
-      if (!digging && bot.entity.onGround) {
+      if (!abortingDig && !digging && bot.entity.onGround) {
         digging = true
         const b = nextPoint.toBreak.shift()
-        const block = bot.blockAt(new Vec3(b.x, b.y, b.z), false)
+        // logger.info({timeToDig: {digging, b}});
+        const blockPosition = new Vec3(b.x, b.y, b.z)
+        logger.info({toBreak: blockPosition});
+        expectedUpdatePositions.add(blockPosition.toString())
+        const block = bot.blockAt(blockPosition, false)
         const tool = bot.pathfinder.bestHarvestTool(block)
         fullStop()
         bot.equip(tool, 'hand', function () {
           bot.dig(block, function (err) {
             lastNodeTime = performance.now()
-            if (err) resetPath('dig_error')
+            if (err) {
+              digErrorCount += 1;
+              logger.info({diggingError: err, blockPosition, digErrorCount});
+              resetPath('dig_error')
+            }
             digging = false
           })
         })
       }
+      logger.info('pathfinder|monitorMovement digging');
       return
     }
     // Handle block placement
@@ -383,16 +472,22 @@ function inject(bot) {
     if (placing || nextPoint.toPlace.length > 0) {
       if (!placing) {
         placing = true
+        // logger.info({nextPoint});
         placingBlock = nextPoint.toPlace.shift()
+        expectedUpdatePositions.add(placingBlock.toString())
         fullStop()
       }
       const block = stateMovements.getScaffoldingItem()
       if (!block) {
         resetPath('no_scaffolding_blocks')
+        logger.info('pathfinder|monitorMovement no scaffolding blocks to place');
         return
       }
       if (bot.pathfinder.LOSWhenPlacingBlocks && placingBlock.y === bot.entity.position.floored().y - 1 && placingBlock.dy === 0) {
-        if (!moveToEdge(new Vec3(placingBlock.x, placingBlock.y, placingBlock.z), new Vec3(placingBlock.dx, 0, placingBlock.dz))) return
+        if (!moveToEdge(new Vec3(placingBlock.x, placingBlock.y, placingBlock.z), new Vec3(placingBlock.dx, 0, placingBlock.dz))) {
+          logger.info('pathfinder|monitorMovement begin move to edge');
+          return
+        }
       }
       let canPlace = true
       if (placingBlock.jump) {
@@ -409,12 +504,13 @@ function inject(bot) {
               resetPath('place_error')
             } else {
               // Dont release Sneak if the block placement was not successful
-              if (!err) bot.setControlState('sneak', false)
-              if (bot.LOSWhenPlacingBlocks && placingBlock.returnPos) returningPos = placingBlock.returnPos.clone()
+              bot.setControlState('sneak', false)
+              if (bot.pathfinder.LOSWhenPlacingBlocks && placingBlock.returnPos) returningPos = placingBlock.returnPos.clone()
             }
           })
         })
       }
+      logger.info('pathfinder|monitorMovement placing block');
       return
     }
 
@@ -424,19 +520,26 @@ function inject(bot) {
     if (Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && Math.abs(dy) < 1) {
       // arrived at next point
       lastNodeTime = performance.now()
-      path.shift()
+      node = path.shift()
+      nodeComplete(node)
       if (path.length === 0) { // done
         if (!dynamicGoal && stateGoal && stateGoal.isEnd(p.floored())) {
           bot.emit('goal_reached', stateGoal)
           stateGoal = null
+        } else {
+          // block just for debug
+          console.log({stateGoal, position: p.floored(), isEnd: stateGoal.isEnd(p.floored()), pos: bot.entity.position});
         }
         fullStop()
+        logger.info('pathfinder|monitorMovement near next node and path length is 0');
         return
       }
       // not done yet
       nextPoint = path[0]
+      // logger.info({toBreak: nextPoint.toBreak, toPlace: nextPoint.toPlace});
       if (nextPoint.toBreak.length > 0 || nextPoint.toPlace.length > 0) {
         fullStop()
+        logger.info('pathfinder|monitorMovement near next node and either blocks left to break or place');
         return
       }
       dx = nextPoint.x - p.x
@@ -472,6 +575,7 @@ function inject(bot) {
       // should never take this long to go to the next node
       resetPath('stuck')
     }
+    logger.info('pathfinder|monitorMovement end of function');
   }
 }
 
