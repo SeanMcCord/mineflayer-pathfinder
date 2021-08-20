@@ -145,6 +145,7 @@ export class Movements {
   public allow1by1towers: boolean;
   public allowFreeMotion: boolean;
   public allowParkour: boolean;
+  public allowMutationHistory: boolean;
 
   public blocksCantBreak: Set<number>;
   public blocksToAvoid: Set<number>;
