@@ -154,6 +154,14 @@ export class Movements {
 
   public maxDropDown: number;
   public digCost: number;
+  public placeCost: number;
+  public liquidCost: number;
+
+  public testBlockCount: number;
+  public testBlockMap: Map<string, number>;
+  public testCacheHits: number;
+  public testBlockCache: any;
+
 
   public countScaffoldingItems(): number;
   public getScaffoldingItem(): Item | null;
